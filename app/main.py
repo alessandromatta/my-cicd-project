@@ -1,4 +1,5 @@
 from flask import Flask, jsonify
+import os
 
 app = Flask(__name__)
 
@@ -15,6 +16,6 @@ def get_data():
     return jsonify({"data": [1, 2, 3, 4, 5], "count": 5})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
-
-
+    # Use environment variable for debug mode, default to False for production
+    debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
+    app.run(host='0.0.0.0', port=5000, debug=debug_mode)
