@@ -1,0 +1,209 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  DOCKER_IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/cicd-lab-app
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  # CODE QUALITY JOBS
+  linting:
+    name: Code Linting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8
+
+      - name: Run Flake8
+        run: |
+          flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 app/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+  code-analysis:
+    name: Security Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit safety
+
+      - name: Run Bandit (Security Linter)
+        run: bandit -r app/ -f json -o bandit-report.json || true
+
+      - name: Display Bandit Report
+        run: bandit -r app/
+
+      - name: Check Dependencies for Vulnerabilities
+        run: safety check --json || true
+
+  # TESTING JOBS
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: [linting]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Unit Tests
+        run: |
+          python -m pytest tests/ -v --tb=short
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [unit-tests]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Integration Tests
+        run: |
+          python -m pytest tests/ -v -m "not e2e"
+
+  e2e-tests:
+    name: End-to-End Tests
+    runs-on: ubuntu-latest
+    needs: [integration-tests]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -r requirements.txt
+
+      - name: Start Application
+        run: |
+          python app/app.py &
+          sleep 5
+
+      - name: Run E2E Tests
+        run: |
+          curl -f http://localhost:5000/ || exit 1
+          curl -f http://localhost:5000/health || exit 1
+          curl -f http://localhost:5000/api/data || exit 1
+
+  # BUILD JOB
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: [code-analysis, e2e-tests]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker Image
+        run: |
+          docker build -t ${{ env.DOCKER_IMAGE_NAME }}:test .
+
+      - name: Test Container
+        run: |
+          docker run -d -p 5000:5000 --name test-container ${{ env.DOCKER_IMAGE_NAME }}:test
+          sleep 5
+          curl -f http://localhost:5000/ || exit 1
+          curl -f http://localhost:5000/health || exit 1
+          docker stop test-container
+          docker rm test-container
+
+      - name: Save Docker Image
+        run: |
+          docker save ${{ env.DOCKER_IMAGE_NAME }}:test -o app-image.tar
+
+      - name: Upload Docker Image Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: docker-image
+          path: app-image.tar
+          retention-days: 1
+
+  # DEPLOYMENT JOB
+  deploy:
+    name: Push to Docker Hub
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Docker Image Artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: docker-image
+
+      - name: Load Docker Image
+        run: docker load -i app-image.tar
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Tag Docker Image
+        run: |
+          docker tag ${{ env.DOCKER_IMAGE_NAME }}:test ${{ env.DOCKER_IMAGE_NAME }}:latest
+          docker tag ${{ env.DOCKER_IMAGE_NAME }}:test ${{ env.DOCKER_IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Push to Docker Hub
+        run: |
+          docker push ${{ env.DOCKER_IMAGE_NAME }}:latest
+          docker push ${{ env.DOCKER_IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Image Digest
+        run: echo "Image pushed successfully!"
+
+
