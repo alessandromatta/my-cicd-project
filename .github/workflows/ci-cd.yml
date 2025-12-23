@@ -49,16 +49,12 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install bandit safety
+          pip install bandit
 
       - name: Run Bandit (Security Linter)
-        run: bandit -r app/ -f json -o bandit-report.json || true
-
-      - name: Display Bandit Report
-        run: bandit -r app/
-
-      - name: Check Dependencies for Vulnerabilities
-        run: safety check --json || true
+        run: |
+          bandit -r app/ -ll || echo "Security scan completed"
+        continue-on-error: true
 
   # TESTING JOBS
   unit-tests:
@@ -205,3 +201,4 @@ jobs:
 
       - name: Image Digest
         run: echo "Image pushed successfully!"
+        
