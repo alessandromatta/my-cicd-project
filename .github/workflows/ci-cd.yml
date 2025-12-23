@@ -53,7 +53,8 @@ jobs:
 
       - name: Run Bandit (Security Linter)
         run: |
-          bandit -r app/ -ll || echo "Security scan completed"
+          bandit -r app/ -ll -f json -o bandit-report.json || true
+          echo "Security scan completed - check bandit-report.json for details"
         continue-on-error: true
 
   # TESTING JOBS
@@ -159,7 +160,7 @@ jobs:
           docker save ${{ env.DOCKER_IMAGE_NAME }}:test -o app-image.tar
 
       - name: Upload Docker Image Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: docker-image
           path: app-image.tar
@@ -176,7 +177,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Download Docker Image Artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: docker-image
 
@@ -201,4 +202,3 @@ jobs:
 
       - name: Image Digest
         run: echo "Image pushed successfully!"
-        
